@@ -1,0 +1,170 @@
+# This script calculates likelihood ratio based on genotypes
+# There are 3 input files.
+# Input file 1: list of SNP info files
+# 1st col: population index
+# 2nd col: name of snp info file
+# SNP info file for a specific population
+# It has a one-line header
+# 1st col: snp id
+# 2nd col: risk allele
+# 3rd col: other allele
+# 4th col: OR
+# 5th-10th col: allele frequency for AFR, AMR, EAS, EUR, SAS, and ALL
+# There should not be missing values in this file
+# Input file 2: genotype file (vcf)
+# It has a one-line header
+# The first 5 columns are: chr, pos, snp id, ref, alt
+# The 6th column and after: genotype as 1|0 or 1/0, etc. Missing data are ./. or .|.
+# There should not be duplicate SNP ID or sample ID.
+# Input file 3: BCSC 5-yr-risk
+# It has a one-line header
+# 1st col: sample ID
+# 2nd col: BCSC 5-yr-risk B
+# 3rd col: population
+
+# Initialization
+
+build.geno=function(a1,a2) {
+	geno.hom.a1=paste(a1,a1,sep='')
+	geno.het1=paste(a1,a2,sep='')
+	geno.het2=paste(a2,a1,sep='')
+	geno.hom.a2=paste(a2,a2,sep='')
+	geno.all=list(hom.risk=geno.hom.a1,het1=geno.het1,het2=geno.het2,hom.alt=geno.hom.a2)
+	return(geno.all)
+}
+
+inNameSNPInput='snp_input_file.txt'
+inName='list_geno_clean.txt'
+inNamePreProb='Risk_5yr.txt'
+outNameLRProd='PRS_WISDOM.txt'
+
+prev=0.04
+
+ncol.snp=3
+ncol.gt=6
+
+list.geno=read.table(inName,as.is=T)
+
+vcf.samples=read.table(list.geno[1,1],header=T,as.is=T,check.names=F,row.names=ncol.snp)
+if (nrow(list.geno)>1) {
+	for (tempname in list.geno[2:nrow(list.geno),1]) {
+        	tempgeno=read.table(tempname,header=T,as.is=T,check.names=F)
+        	if (all(rownames(vcf.samples)==tempgeno[,ncol.snp])) {
+                	vcf.samples=cbind(vcf.samples,tempgeno[,ncol.gt,drop=F])
+        	}
+	}
+}
+
+snp.input.all=read.table(inNameSNPInput,sep='\t',stringsAsFactors=F,strip.white=T)
+pre.prob=read.table(inNamePreProb,header=T,sep='\t',stringsAsFactors=F,strip.white=T)
+
+# End of initialization
+
+n.pop=unique(pre.prob[,3])
+
+prod.lr.indv.final=NULL
+
+geno.samples=NULL
+for (k in 1:nrow(vcf.samples)) {
+	tempgeno=vcf.samples[k,5:ncol(vcf.samples),drop=F]
+	tempgeno.letter=tempgeno
+	hom.ref=paste0(vcf.samples[k,3],vcf.samples[k,3])
+	het=paste0(vcf.samples[k,3],vcf.samples[k,4])
+	hom.alt=paste0(vcf.samples[k,4],vcf.samples[k,4])
+	tempind.hom.ref=which(tempgeno=='0|0'|tempgeno=='0/0')
+	tempind.het=which(tempgeno=='1|0'|tempgeno=='1/0'|tempgeno=='0|1'|tempgeno=='0/1')
+	tempind.hom.alt=which(tempgeno=='1|1'|tempgeno=='1/1')
+	tempind.missing=which(tempgeno=='./.'|tempgeno=='.|.')
+	tempgeno.letter[tempind.hom.ref]=hom.ref
+	tempgeno.letter[tempind.het]=het
+	tempgeno.letter[tempind.hom.alt]=hom.alt
+	tempgeno.letter[tempind.missing]=NA
+	geno.samples=cbind(geno.samples,t(tempgeno.letter))
+}
+
+for (j in n.pop) {
+	inNameSNP=snp.input.all[snp.input.all[,1]==j,2]
+	snp.info=read.table(inNameSNP,header=T,row.names=1,stringsAsFactors=F,strip.white=T,sep='\t')
+	sampleid.pop=pre.prob[pre.prob[,3]==j,1]
+	geno.pop=geno.samples[is.element(rownames(geno.samples),sampleid.pop),,drop=F]
+
+	snp.info.common=snp.info[is.element(rownames(snp.info),colnames(geno.pop)),]
+	geno.pop.common=geno.pop[,rownames(snp.info.common),drop=F]
+
+	snps.common=rownames(snp.info.common)
+	snps.in.ref.not.samples=rownames(snp.info)[!is.element(rownames(snp.info),colnames(geno.pop))]
+	snps.in.samples.not.ref=colnames(geno.pop)[!is.element(colnames(geno.pop),rownames(snp.info))]
+
+	freq=snp.info.common[,3]
+	OR=snp.info.common[,4]
+
+	n.snp=nrow(snp.info.common)
+
+	geno.aa=freq^2
+	geno.ab=2*freq*(1-freq)
+	geno.bb=(1-freq)^2
+	geno.3=cbind(geno.aa,geno.ab,geno.bb)
+
+	risk.aa=OR^2
+	risk.ab=OR
+	risk.bb=rep(1,n.snp)
+	risk.3=cbind(risk.aa,risk.ab,risk.bb)
+
+	denom.mat=geno.3*risk.3
+	denom=apply(denom.mat,1,sum)
+
+	lr.aa=(1-prev)*(risk.aa/(denom-risk.aa*prev))
+	lr.ab=(1-prev)*(risk.ab/(denom-risk.ab*prev))
+	lr.bb=(1-prev)/(denom-risk.bb*prev)
+	lr.mat=cbind(LR.AA=lr.aa,LR.AB=lr.ab,LR.BB=lr.bb)
+	rownames(lr.mat)=rownames(snp.info.common)
+
+	allele.risk=snp.info.common[,1]
+	allele.alt=snp.info.common[,2]
+
+	lr.all.indv=NULL
+	snp.selected=NULL
+	snp.strand.flipped=NULL
+	snp.error=NULL
+	snp.triallelic=NULL
+	lr.tot=1
+	for (i in 1:n.snp) {
+		templr=lr.mat[i,]
+		tempsnp=rownames(lr.mat)[i]
+		a.risk=allele.risk[i]
+		a.alt=allele.alt[i]
+
+		geno.all=build.geno(a.risk,a.alt)
+		geno.hom.risk=geno.all$hom.risk
+		geno.het1=geno.all$het1
+		geno.het2=geno.all$het2
+		geno.hom.alt=geno.all$hom.alt
+
+		geno.snp.info=levels(as.factor(c(geno.hom.risk,geno.het1,geno.het2,geno.hom.alt)))
+	
+		tempgeno=geno.pop.common[,tempsnp]
+		geno.level.sample=levels(as.factor(tempgeno))
+		n.geno.sample=length(geno.level.sample)
+
+		snp.selected=c(snp.selected,tempsnp)
+		tempgeno.num=rep(NA,length(tempgeno))
+		tempgeno.num[tempgeno==geno.hom.risk]=1
+		tempgeno.num[tempgeno==geno.het1|tempgeno==geno.het2]=2
+		tempgeno.num[tempgeno==geno.hom.alt]=3
+		templr.geno=templr[tempgeno.num]
+		templr.geno[is.na(tempgeno)]=1
+		lr.tot=lr.tot*prod(templr.geno)
+		lr.all.indv=cbind(lr.all.indv,templr.geno)
+	}			
+
+	colnames(lr.all.indv)=snp.selected
+	rownames(lr.all.indv)=rownames(geno.pop.common)
+	prod.lr.indv=apply(lr.all.indv,1,prod)
+	prod.lr.indv.pop=cbind(SampleID=rownames(lr.all.indv),prod.lr.indv,j)
+	prod.lr.indv.final=rbind(prod.lr.indv.final,prod.lr.indv.pop)
+}
+
+colnames(prod.lr.indv.final)=c('SampleID','PRS','Pop')
+write.table(prod.lr.indv.final,outNameLRProd,quote=F,sep='\t',row.names=F)
+
+rm(list=ls())
