@@ -1,0 +1,4 @@
+1	snp_table_313_EUR.txt
+2	snp_table_313_AFR.txt
+3	snp_table_313_EAS.txt
+8	snp_table_313_AMR.txt
